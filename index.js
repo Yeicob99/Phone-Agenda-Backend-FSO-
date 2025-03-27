@@ -3,6 +3,8 @@ const morgan = require('morgan');
 const corts = require('cors')
 const app = express();
 const path = require('path');
+require('dotenv').config();
+const Person = require('./models/person');
 
 app.use(express.json());
 app.use(corts())
@@ -17,106 +19,130 @@ morgan.token('body', (req) => {
 
 app.use(morgan(':method :url :status - :response-time ms :body'));
 
-const persons = [
-    { 
-        "id": 1,
-        "name": "Arto Hellas", 
-        "number": "040-123456"
-    },
-    { 
-        "id": 2,
-        "name": "Ada Lovelace", 
-        "number": "39-44-5323523"
-    },
-    { 
-        "id": 3,
-        "name": "Dan Abramov", 
-        "number": "12-43-234345"
-    },
-    { 
-        "id": 4,
-        "name": "Mary Poppendieck", 
-        "number": "39-23-6423122"
-    }
-];
-
-app.get('/api/persons', (req, res) => {
-    res.json(persons);
+app.get('/api/persons', (req, res, next) => {
+    Person.find({})
+    .then(persons => {
+      res.json(persons);
+    })
+    .catch(error => next(error));
 });
+
 
 //direccion info 
-
- app.get('/info', (req, res) => {
-    const numContacts = persons.length;
-    const currentTime = new Date();
-    res.send(
-        `<p>Phonebook has info for ${numContacts} people</p>
-        <p>${currentTime}</p>
-      ` )
-});
+app.get('/info', (req, res, next) => {
+    Person.countDocuments({})
+      .then(count => {
+        const currentTime = new Date();
+        res.send(
+          `<p>Phonebook has info for ${count} people</p>
+           <p>${currentTime}</p>`
+        );
+      })
+      .catch(error => {
+        console.error("Error obteniendo info:", error.message);
+        res.status(500).end();
+      })
+  });
 
 
 //funcion borrar
-app.delete('/api/persons/:id', (req, res) => {
-    const id = parseInt(req.params.id); 
-    const index = persons.findIndex(person => person.id === id);
-
-    if (index !== -1) {
-        persons.splice(index, 1); 
-        res.status(204).end(); 
-    } else {
-        res.status(404).json({ error: `Person with ID ${id} not found` });
-    }
-});
+app.delete('/api/persons/:id', (req, res, next) => {
+    Person.findByIdAndDelete(req.params.id)
+      .then(result => {
+        if (result) {
+          res.status(204).end(); // ✅ Persona eliminada
+        } else {
+          res.status(404).json({ error: 'Person not found' }); // ❌ No existe ese ID
+        }
+      })
+      .catch(error => {
+        console.error("Error eliminando:", error.message);
+        res.status(500).end();
+      })
+  });
+  
 
 //buscar uno especifico por id
-app.get('/api/persons/:id', (req, res) => {
-    const id = parseInt(req.params.id); 
-    const person = persons.find(person => person.id === id); 
-
-    if (person) {
-        res.json(person); 
-    } else {
-        res.status(404).json({ error: `Person with ID ${id} not found` }); 
-    }
-});
+app.get('/api/persons/:id', (req, res, next) => {
+    Person.findById(req.params.id)
+      .then(person => {
+        if (person) {
+          res.json(person);
+        } else {
+          res.status(404).json({ error: 'Person not found' });
+        }
+      })
+      .catch(error => next(error));
+  });
 
 //solicitus http post
-app.post('/api/persons', (req, res) => {
+app.post('/api/persons', (req, res, next) => {
     const body = req.body;
-
+  
     if (!body.name || !body.number) {
-        return res.status(400).json({ error: "Name and number are required" });
+      return res.status(400).json({ error: "Name and number are required" });
     }
+  
+    // 🔍 Verificar si ya existe una persona con ese nombre
+    Person.findOne({ name: body.name })
+      .then(existing => {
+        if (existing) {
+          return res.status(400).json({ error: "Name must be unique" });
+        }
+  
+        const person = new Person({
+          name: body.name,
+          number: body.number,
+        });
+  
+        // 💾 Guardar en MongoDB
+        person.save()
+          .then(savedPerson => {
+            res.status(201).json(savedPerson);
+          })
+     .catch(error => next(error));
+      })
+         .catch(error => next(error));
+  });
 
-    const nameExists = persons.some(person => person.name.toLowerCase() === body.name.toLowerCase());
-    if (nameExists) {
-        return res.status(400).json({ error: "Name must be unique" });
-    }
+//petición put
 
-    if (typeof body.name !== "string" || typeof body.number !== "string") {
-        return res.status(400).json({ error: "Invalid data type: Name must be a string and number must be a string" });
-    }
+app.put('/api/persons/:id', (req, res, next) => {
+  const { name, number } = req.body;
+  const updatedPerson = {
+    name,
+    number,
+  };
 
-    const newID = Math.floor(Math.random() * 10000) + 1;
-
-    const newPerson = {
-        id: newID,
-        name: body.name,
-        number: body.number
-    };
-
-    persons.push(newPerson);
-
-    res.status(201).json(newPerson);
+  Person.findByIdAndUpdate(req.params.id, updatedPerson, { new: true })
+    .then(updated => {
+      res.json(updated);
+    })
+    .catch(error => next(error));
 });
+
 
 
 const PORT = 3001;
+
+const errorHandler = (error, req, res, next) => {
+    console.error('❌ Error atrapado por middleware:', error.message);
+  
+    if (error.name === 'CastError') {
+      return res.status(400).send({ error: 'malformatted id' });
+    }
+  
+    next(error); // Pásalo a Express si no es nuestro error
+  };
+
+app.use(errorHandler);
+
+
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
 });
-//
+
+
 
 
 
